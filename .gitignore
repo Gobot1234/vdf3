@@ -1,5 +1,9 @@
-dist
+*.json
+*.py[cod]
+*.log
 *.egg-info
-*.pyc
-.coverage
-*.swp
+
+venv
+.idea
+.mypy_cache
+.pytest_cache
