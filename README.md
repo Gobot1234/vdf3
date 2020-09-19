@@ -59,6 +59,6 @@ b = vdf.vbkv_dumps(d)
 
 Using an alternative mapper
 
-.. code:: python
-
-  d = vdf.loads(vdf_string, mapper=collections.OrderedDict)
+```py
+d = vdf.loads(vdf_string, mapper=collections.OrderedDict)
+```
