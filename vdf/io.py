@@ -20,7 +20,6 @@ __all__ = (
     "vbkv_dumps",
 )
 
-TM = TypeVar("TM", bound=Type[Mapping])
 M = TypeVar("M", bound=Mapping)
 
 BOMS = "\ufffe\ufeff"
@@ -77,7 +76,7 @@ def _unescape(text: str) -> str:
 # parsing and dumping for KV1
 def parse(
     s: str,
-    mapper: TM = VDFDict,
+    mapper: Type[M] = VDFDict,
     escaped: bool = True,
 ) -> M:
     """Deserialize a string to a Python object.
@@ -291,7 +290,7 @@ BIN_END_ALT = b"\x0B"
 
 
 def binary_loads(
-    b: bytes, mapper: TM = VDFDict, alt_format: bool = False, raise_on_remaining: bool = True
+    b: bytes, mapper: Type[M] = VDFDict, alt_format: bool = False, raise_on_remaining: bool = True
 ) -> M:
     """Deserialize bytes to a Python object.
 
@@ -314,7 +313,7 @@ def binary_loads(
 
 def binary_load(
     fp: BufferedIOBase,
-    mapper: TM = VDFDict,
+    mapper: Type[M] = VDFDict,
     alt_format: bool = False,
     raise_on_remaining: bool = False,
 ) -> M:
