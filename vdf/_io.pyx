@@ -1,14 +1,16 @@
+import functools
 import re
 import struct
 from binascii import crc32
-from io import BytesIO, IOBase, StringIO
-from typing import Any, Generator
+from collections.abc import Mapping
+from io import BytesIO, StringIO
+
+from cpython cimport list
 
 from .exceptions import VDFDecodeError
 from .vdf_dict import VDFDict
 
 __all__ = (
-    "parse",
     "load",
     "loads",
     "dump",
@@ -21,27 +23,25 @@ __all__ = (
     "vbkv_dumps",
 )
 
-BOMS = "\ufffe\ufeff"
-CLOSING_BRACE = "}"
-OPENING_BRACE = "{"
-COMMENTER = "/"
-KV_RE = re.compile(
-    r'^("(?P<qkey>(?:\\.|[^\\"])+)"|(?P<key>#?[a-z0-9\-\_\\\?$%<>]+))'
+
+cdef str BOMS = "\ufffe\ufeff"
+cdef str CLOSING_BRACE = "}"
+cdef str OPENING_BRACE = "{"
+cdef str COMMENTER = "/"
+cdef KV_RE = re.compile(
+    r'^("(?P<qkey>(?:\\.|[^\\"])+)"|(?P<key>#?[a-z0-9\-_\\?$%<>]+))'
     r"([ \t]*("
     r'"(?P<qval>(?:\\.|[^\\"])*)(?P<vq_end>")?'
-    r"|(?P<val>(?:(?<!/)/(?!/)|[a-z0-9\-\_\\\?\*\.$<>])+)"
+    r"|(?P<val>(?:(?<!/)/(?!/)|[a-z0-9\-_\\?*.$<>])+)"
     r"|(?P<sblock>{[ \t]*)(?P<eblock>})?"
     r"))?",
     flags=re.I,
 )
-
-
-def strip_bom(line: str) -> str:
-    return line.lstrip(BOMS)
-
+cdef _UNESCAPE_RE = re.compile(r"(\\n|\\t|\\v|\\b|\\r|\\f|\\a|\\\\|\\\?|\\\"|\\')")
+cdef _ESCAPE_RE = re.compile(r"[\n\t\v\b\r\f\a\\?\"']")
 
 # string escaping
-_UNESCAPE_CHAR_MAP = {
+cdef dict _UNESCAPE_CHAR_MAP = {
     r"\n": "\n",
     r"\t": "\t",
     r"\v": "\v",
@@ -54,43 +54,39 @@ _UNESCAPE_CHAR_MAP = {
     r"\"": '"',
     r"\'": "'",
 }
-_ESCAPE_CHAR_MAP = {v: k for k, v in _UNESCAPE_CHAR_MAP.items()}
+cdef dict _ESCAPE_CHAR_MAP = {v: k for k, v in _UNESCAPE_CHAR_MAP.items()}
 
 
-def _re_escape_match(m: re.Match) -> str:
+
+cdef str _re_escape_match(m):
     return _ESCAPE_CHAR_MAP[m.group()]
 
 
-def _re_unescape_match(m: re.Match) -> str:
+cdef str _re_unescape_match(m):
     return _UNESCAPE_CHAR_MAP[m.group()]
 
 
-def _escape(text: str) -> str:
-    return re.sub(r"[\n\t\v\b\r\f\a\\?\"']", _re_escape_match, text)
+cdef str _escape(str text):
+    return _ESCAPE_RE.sub(_re_escape_match, text)
 
 
-def _unescape(text: str) -> str:
-    return re.sub(
-        r"(\\n|\\t|\\v|\\b|\\r|\\f|\\a|\\\\|\\\?|\\\"|\\')", _re_unescape_match, text
-    )
+cdef str _unescape(str text):
+    return _UNESCAPE_RE.sub(_re_unescape_match, text)
+
+
+cdef str strip_bom(str line):
+    return line.lstrip(BOMS)
 
 
 # parsing and dumping for KV1
-def parse(
-    in_stream: IOBase,
-    escaped: bool = True,
-) -> VDFDict:
-    """Deserialize a string to a Python object.
-
-    Parameters
-    -----------
-    in_stream: :class:`str`
-        The string to parse into a :class:`.VDFDict`.
-    escaped: :class:`bool`
-        Whether or not there are escape codes in the ``s``
-    """
-    stack = [VDFDict()]
-    expect_bracket = False
+cdef parse(
+    in_stream,
+    int escaped,
+):
+    cdef list stack = list((VDFDict(),))
+    cdef int expect_bracket = False
+    cdef str line
+    cdef int lineno
     for lineno, line in enumerate(in_stream, 1):
         if lineno == 1:
             line = strip_bom(line)
@@ -113,9 +109,7 @@ def parse(
             raise VDFDecodeError(
                 msg="expected opening bracket",
                 lineno=lineno,
-                filename=getattr(
-                    in_stream, "name", f"<{in_stream.__class__.__name__}>"
-                ),
+                filename=getattr(in_stream, 'name', f'<{in_stream.__class__.__name__}>'),
                 line=line,
             )
 
@@ -128,9 +122,7 @@ def parse(
             raise VDFDecodeError(
                 msg="too many closing brackets",
                 lineno=lineno,
-                filename=getattr(
-                    in_stream, "name", f"<{in_stream.__class__.__name__}>"
-                ),
+                filename=getattr(in_stream, 'name', f'<{in_stream.__class__.__name__}>'),
                 line=line,
             )
 
@@ -146,9 +138,7 @@ def parse(
                     raise VDFDecodeError(
                         msg="unexpected EOF",
                         lineno=lineno,
-                        filename=getattr(
-                            in_stream, "name", f"<{in_stream.__class__.__name__}>"
-                        ),
+                        filename=getattr(in_stream, 'name', f'<{in_stream.__class__.__name__}>'),
                         line=line,
                     ) from None
 
@@ -163,10 +153,10 @@ def parse(
                 _m = VDFDict()
                 stack[-1][key] = _m
 
-                if match["eblock"] is None:
+                if match['eblock'] is None:
                     # only expect a bracket if it's not already closed or on the same line
                     stack.append(_m)
-                    if match["sblock"] is None:
+                    if match['sblock'] is None:
                         expect_bracket = True
 
             # we've matched a simple keyvalue pair, map it to the last dict obj in the stack
@@ -181,9 +171,7 @@ def parse(
                         raise VDFDecodeError(
                             msg="unexpected EOF",
                             lineno=lineno,
-                            filename=getattr(
-                                in_stream, "name", f"<{in_stream.__class__.__name__}>"
-                            ),
+                            filename=getattr(in_stream, 'name', f'<{in_stream.__class__.__name__}>'),
                             line=line,
                         )
 
@@ -196,98 +184,101 @@ def parse(
         raise VDFDecodeError(
             msg="unclosed parenthesis or quotes",
             lineno=lineno,
-            filename=getattr(in_stream, "name", f"<{in_stream.__class__.__name__}>"),
+            filename=getattr(in_stream, 'name', f'<{in_stream.__class__.__name__}>'),
             line=line,
         )
 
     return stack.pop()
 
 
-def loads(s: str, **kwargs: Any) -> VDFDict:
-    """
-    Deserialize a :class:`str` containing a VDF document to a Python object.
-    """
-    fp = StringIO(s)
-    return parse(fp, **kwargs)
+cpdef loads(s, int escaped = True):
+    s = StringIO(s)
+    return parse(s, escaped)
 
 
-def load(fp: IOBase, **kwargs: Any) -> VDFDict:
-    """Deserialize a :class:`str` containing a VDF document to a :class:`.VDFDict`."""
-    return parse(fp, **kwargs)
+cpdef load(fp, int escaped):
+    return parse(fp, escaped)
 
 
-def dumps(obj: VDFDict, pretty: bool = False, escaped: bool = True) -> str:
+cpdef str dumps(obj, int pretty = False, int escaped = True):
     """Serialize ``obj`` to a VDF formatted :class:`str`."""
-    return "".join(_dump_gen(obj, pretty, escaped))
+    return "".join(_dump_gen(obj, list(), pretty=pretty, escaped=escaped))
 
 
-def dump(obj: VDFDict, fp: IOBase, pretty: bool = False, escaped: bool = True) -> None:
+cpdef dump(obj, fp, int pretty = False, int escaped = True):
     """Dump a :class:`.VDFDict` a VDF formatted stream."""
 
-    for chunk in _dump_gen(obj, pretty, escaped):
-        fp.write(chunk)
+    fp.write(dumps(obj, pretty, escaped))
 
 
-def _dump_gen(
-    data: VDFDict, pretty: bool = False, escaped: bool = True, level: int = 0
-) -> Generator[str, None, None]:
-    line_indent = ""
+cpdef list _dump_gen(obj, list ret, int pretty=False, int escaped=True, int level=0):
+    cdef str indent = "\t"
+    cdef str line_indent = indent * level if pretty else ""
 
-    if pretty:
-        indent = "\t"
-        line_indent = indent * level
-
-    for key, value in data.items():
+    for key, value in obj.items():
         if escaped and isinstance(key, str):
             key = _escape(key)
 
-        if isinstance(value, VDFDict):
-            yield '{0}"{1}"\n{0}}\n'.format(line_indent, key)
-            yield from _dump_gen(value, pretty, escaped, level + 1)
-            yield "{}}\n".format(line_indent)
+        if isinstance(value, Mapping):
+            ret.append('{0}"{1}"\n{0}}\n'.format(line_indent, key))
+            ret.append(_dump_gen(value, ret, pretty, escaped, level + 1))
+            ret.append("{}}\n".format(line_indent))
         else:
             if escaped and isinstance(value, str):
                 value = _escape(value)
-
-            yield f'{line_indent}"{key}" "{value}"\n'
-
+            ret.append(f'{line_indent}"{key}" "{value}"\n')
+    return ret
 
 # binary VDF
-class BASE_INT(int):
-    def __repr__(self):
+cdef class BASE_INT(int):
+    def __repr__(self) -> str:
         return f"{self.__class__.__name__}({int(self)})"
 
 
-class UINT_64(BASE_INT):
+cdef class UINT_64(BASE_INT):
     pass
 
 
-class INT_64(BASE_INT):
+cdef class INT_64(BASE_INT):
     pass
 
 
-class POINTER(BASE_INT):
+cdef class POINTER(BASE_INT):
     pass
 
 
-class COLOR(BASE_INT):
+cdef class COLOR(BASE_INT):
     pass
 
 
-BIN_NONE = b"\x00"
-BIN_STRING = b"\x01"
-BIN_INT32 = b"\x02"
-BIN_FLOAT32 = b"\x03"
-BIN_POINTER = b"\x04"
-BIN_WIDESTRING = b"\x05"
-BIN_COLOUR = b"\x06"
-BIN_UINT64 = b"\x07"
-BIN_END = b"\x08"
-BIN_INT64 = b"\x0A"
-BIN_END_ALT = b"\x0B"
+cdef bytes BIN_NONE = b"\x00"
+cdef bytes BIN_STRING = b"\x01"
+cdef bytes BIN_INT32 = b"\x02"
+cdef bytes BIN_FLOAT32 = b"\x03"
+cdef bytes BIN_POINTER = b"\x04"
+cdef bytes BIN_WIDESTRING = b"\x05"
+cdef bytes BIN_COLOUR = b"\x06"
+cdef bytes BIN_UINT64 = b"\x07"
+cdef bytes BIN_END = b"\x08"
+cdef bytes BIN_INT64 = b"\x0A"
+cdef bytes BIN_END_ALT = b"\x0B"
 
 
-def _read_string(fp: IOBase, wide: bool = False) -> str:
+cpdef binary_loads(bytes b, int alt_format = False, int raise_on_remaining = True):
+    """Deserialize bytes to a Python object.
+
+    Parameters
+    -----------
+    b: :class:`bytes`
+        The bytes containing a VDF in "binary form" to parse into a :class:`.VDFDict`.
+    alt_format: :class:`bool`
+        Whether or not to use the alternative format. Defaults to ``False``.
+    raise_on_remaining: :class:`bool`
+        Whether or not to raise an :exc:`VDFDecodeError` if there is more data to read.
+    """
+    return binary_load(BytesIO(b), alt_format, raise_on_remaining)
+
+cdef str _read_string(fp, int wide=False):
     buf, end = b"", -1
     offset = fp.tell()
 
@@ -312,50 +303,33 @@ def _read_string(fp: IOBase, wide: bool = False) -> str:
 
     return result.decode("utf-16") if wide else result.decode("utf-8", "replace")
 
-
-def binary_loads(
-    b: bytes, alt_format: bool = False, raise_on_remaining: bool = True
-) -> VDFDict:
+cpdef binary_load(
+    fp,
+    int alt_format=False,
+    int raise_on_remaining=False,
+):
     """Deserialize bytes to a Python object.
 
     Parameters
     -----------
-    b: :class:`bytes`
-        The bytes containing a VDF in "binary form" to parse into a :class:`.VDFDict`.
-    alt_format: :class:`bool`
-        Whether or not to use the alternative format. Defaults to ``False``.
-    raise_on_remaining: :class:`bool`
-        Whether or not to raise an :exc:`SyntaxError` if there is more data to read.
-    """
-    return binary_load(BytesIO(b), alt_format, raise_on_remaining)
-
-
-def binary_load(
-    fp: IOBase,
-    alt_format: bool = False,
-    raise_on_remaining: bool = False,
-) -> VDFDict:
-    """Deserialize bytes to a Python object.
-
-    Parameters
-    -----------
-    fp: :class:`IOBase`
+    fp: :class:`BufferedIOBase`
         A buffer containing the VDF info.
+    mapper: type[:class:`collections.Mapping`]
+        A :class:`dict`-like class to be used after deserialization. Default is :class:`VDFDict`.
     alt_format: :class:`bool`
         Whether or not to use the alternative format. Defaults to ``False``.
     raise_on_remaining: :class:`bool`
-        Whether or not to raise an :exc:`SyntaxError` if there is more data to read.
+        Whether or not to raise an :exc:`VDFDecodeError` if there is more data to read.
     """
     # helpers
-    int32 = struct.Struct("<i")
-    uint64 = struct.Struct("<Q")
-    int64 = struct.Struct("<q")
-    float32 = struct.Struct("<f")
-
-    stack = [VDFDict()]
-    CURRENT_BIN_END = BIN_END if not alt_format else BIN_END_ALT
-
-    for t in iter(lambda: fp.read(1), b""):
+    cdef int32 = struct.Struct("<i")
+    cdef uint64 = struct.Struct("<Q")
+    cdef int64 = struct.Struct("<q")
+    cdef float32 = struct.Struct("<f")
+    cdef list stack = list((VDFDict(),))
+    cdef bytes CURRENT_BIN_END = BIN_END if not alt_format else BIN_END_ALT
+    func = functools.partial(fp.read, 1)  # lambdas seem to cause a compiler crash atm
+    for t in iter(func, b""):
         if t == CURRENT_BIN_END:
             if len(stack) > 1:
                 stack.pop()
@@ -388,7 +362,7 @@ def binary_load(
         elif t == BIN_FLOAT32:
             stack[-1][key] = float32.unpack(fp.read(float32.size))[0]
         else:
-            raise SyntaxError(f"Unknown data type at offset {fp.tell() - 1}: {t!r}")
+            raise VDFDecodeError(f"Unknown data type at offset {fp.tell() - 1}: {t!r}")
 
     if len(stack) != 1:
         raise VDFDecodeError("Reached EOF, but Binary VDF is incomplete")
@@ -401,67 +375,68 @@ def binary_load(
     return stack.pop()
 
 
-def binary_dumps(obj: VDFDict, **kwargs: Any) -> bytes:
+cpdef bytes binary_dumps(obj, int alt_format=False, int raise_on_remaining=False):
     """Serialize ``obj`` to a binary VDF formatted ``bytes``."""
     buf = BytesIO()
-    binary_dump(obj, buf, **kwargs)
+    binary_dump(obj, buf, alt_format, raise_on_remaining)
     return buf.getvalue()
 
 
-def binary_dump(obj: VDFDict, fp: IOBase, **kwargs: Any) -> None:
-    """Serialize ``obj`` to a binary VDF formatted :class:`bytes` and write it to a :class:`IOBase`"""
-    for chunk in _binary_dump_gen(obj, **kwargs):
-        fp.write(chunk)
+cpdef binary_dump(obj, fp, int alt_format=False, int raise_on_remaining=False):
+    """Serialize ``obj`` to a binary VDF formatted :class:`bytes` and write it to a :class:`BufferedIOBase`"""
+    fp.write(b"".join(_binary_dumper(obj, list(), alt_format, raise_on_remaining)))
 
 
-def _binary_dump_gen(
-    obj: VDFDict, level: int = 0, alt_format: bool = False
-) -> Generator[bytes, None, None]:
+cdef _binary_dumper(obj, list ret, int level = 0, int alt_format = False):
     if level == 0 and len(obj) == 0:
         return
-
-    int32 = struct.Struct("<i")
-    uint64 = struct.Struct("<Q")
-    int64 = struct.Struct("<q")
-    float32 = struct.Struct("<f")
+    cdef int32 = struct.Struct("<i")
+    cdef uint64 = struct.Struct("<Q")
+    cdef int64 = struct.Struct("<q")
+    cdef float32 = struct.Struct("<f")
 
     for key, value in obj.items():
         key = key.encode("utf-8")
 
-        if isinstance(value, VDFDict):
-            yield BIN_NONE + key + BIN_NONE
-            yield from _binary_dump_gen(value, level + 1, alt_format=alt_format)
+        if isinstance(value, Mapping):
+            ret.append(BIN_NONE + key + BIN_NONE)
+            ret.append(_binary_dumper(value, ret, level + 1, alt_format=alt_format))
         elif isinstance(value, UINT_64):
-            yield BIN_UINT64 + key + BIN_NONE + uint64.pack(value)
+            ret.append(BIN_UINT64 + key + BIN_NONE + uint64.pack(value))
         elif isinstance(value, INT_64):
-            yield BIN_INT64 + key + BIN_NONE + int64.pack(value)
+            ret.append(BIN_INT64 + key + BIN_NONE + int64.pack(value))
         elif isinstance(value, str):
             try:
                 value = value.encode("utf-8") + BIN_NONE
-                yield BIN_STRING
+                ret.append(BIN_STRING)
             except UnicodeError:
                 value = value.encode("utf-16") + BIN_NONE * 2
-                yield BIN_WIDESTRING
-            yield key + BIN_NONE + value
+                ret.append(BIN_WIDESTRING)
+            ret.append(key + BIN_NONE + value)
         elif isinstance(value, float):
-            yield BIN_FLOAT32 + key + BIN_NONE + float32.pack(value)
-        elif isinstance(value, (COLOR, POINTER, int, int)):
+            ret.append(BIN_FLOAT32 + key + BIN_NONE + float32.pack(value))
+        elif isinstance(value, int):
             if isinstance(value, COLOR):
-                yield BIN_COLOUR
+                ret.append(BIN_COLOUR)
             elif isinstance(value, POINTER):
-                yield BIN_POINTER
+                ret.append(BIN_POINTER)
             else:
-                yield BIN_INT32
-            yield key + BIN_NONE
-            yield int32.pack(value)
+                ret.append(BIN_INT32)
+            ret.append(key + BIN_NONE)
+            ret.append(int32.pack(value))
         else:
             raise TypeError(f"Unsupported type: {value.__class__}")
 
-    yield BIN_END if not alt_format else BIN_END_ALT
+    ret.append(BIN_END if not alt_format else BIN_END_ALT)
+    return ret
 
 
-def vbkv_loads(s: bytes, **kwargs) -> VDFDict:
-    """Deserialize bytes containing a VBKV to a Python object."""
+cpdef vbkv_loads(s: bytes, int raise_on_remaining=False):
+    """Deserialize bytes containing a VBKV to a Python object.
+
+    mapper: type[:class:`collections.Mapping`]
+        A :class:`dict`-like class to be used after deserialization. Default is :class:`VDFDict`.
+    """
     if s[:4] != b"VBKV":
         raise ValueError("Invalid header")
 
@@ -470,12 +445,12 @@ def vbkv_loads(s: bytes, **kwargs) -> VDFDict:
     if checksum != crc32(s[8:]):
         raise ValueError("Invalid checksum")
 
-    return binary_loads(s[8:], alt_format=True, **kwargs)
+    return binary_loads(s[8:], alt_format=True, raise_on_remaining=raise_on_remaining)
 
 
-def vbkv_dumps(obj: VDFDict) -> bytes:
+cpdef vbkv_dumps(obj):
     """Serialize ``obj`` to a VBKV formatted :class:`bytes`."""
-    data = b"".join(_binary_dump_gen(obj, alt_format=True))
+    data = b"".join(_binary_dumper(obj, list(), level=0, alt_format=True))  # not too sure why you need to supply level
     checksum = crc32(data)
 
     return b"VBKV" + struct.pack("<i", checksum) + data

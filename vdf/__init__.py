@@ -9,8 +9,16 @@ __author__ = (
 )
 
 from typing import NamedTuple
+from multidict import USE_CYTHON_EXTENSIONS
 
-from .io import *
+from .exceptions import *
+
+if USE_CYTHON_EXTENSIONS:
+    from ._io import *
+else:
+    from .io import *
+
+
 from .vdf_dict import *
 
 

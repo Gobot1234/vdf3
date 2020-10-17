@@ -5,6 +5,14 @@ import re
 
 from setuptools import setup
 
+try:
+    from Cython.Build import cythonize
+except ImportError:
+    BUILD_PYX = False
+    cythonize = lambda *args: None
+else:
+    BUILD_PYX = True
+
 ROOT = pathlib.Path(__file__).parent
 
 
@@ -47,6 +55,7 @@ setup(
     license="MIT",
     description="Library for working with Valve's VDF text format",
     requires=["multidict"],
+    ext_modules=[cythonize("vdf/_io.pyx")] if BUILD_PYX else None,
     long_description=README,
     long_description_content_type="text/markdown",
     include_package_data=True,
